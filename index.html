@@ -218,6 +218,26 @@
   .rec-name { font-size: 15px; font-weight: 500; color: var(--text); }
   .rec-by { font-size: 12px; color: var(--text3); margin-top: 2px; }
   .rec-visited { font-size: 11px; color: var(--green); margin-top: 3px; }
+  .rec-card { flex-direction: column; align-items: stretch; }
+  .rec-card-top { display: flex; align-items: center; gap: 14px; }
+  .rec-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .rec-btn {
+    flex: 1;
+    background: var(--surface2);
+    border: 0.5px solid var(--border2);
+    border-radius: var(--radius-sm);
+    color: var(--text2);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 9px 4px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    text-align: center;
+  }
+  .rec-btn.visit-btn { color: var(--green); border-color: rgba(122,184,122,0.35); }
+  .rec-btn.remove-btn { color: var(--red); border-color: rgba(224,112,96,0.35); }
+  .rec-btn.confirm-remove { background: var(--red); color: #2a0e0a; border-color: var(--red); }
 
   /* BOTTOM NAV */
   .bottom-nav {
@@ -608,14 +628,59 @@ function renderRecs() {
     </div>
     ${places.map(r => {
       const visited = visitedNames.has(r.name.toLowerCase());
+      const key = recKey(r.name, r.by);
       return `<div class="rec-card">
-        <div style="flex:1;">
-          <div class="rec-name">${r.name}</div>
-          ${visited ? `<div class="rec-visited">✓ Already visited</div>` : `<div class="rec-by">Not visited yet</div>`}
+        <div class="rec-card-top">
+          <div style="flex:1;">
+            <div class="rec-name">${r.name}</div>
+            ${visited ? `<div class="rec-visited">✓ Already visited</div>` : `<div class="rec-by">Not visited yet</div>`}
+          </div>
         </div>
+        ${visited ? '' : `
+        <div class="rec-actions" id="rec-actions-${key}">
+          <button class="rec-btn visit-btn" onclick="markVisited('${escJs(r.name)}','${escJs(r.by)}')">Mark as visited &amp; rate</button>
+          <button class="rec-btn remove-btn" onclick="confirmRemoveRec('${escJs(r.name)}','${escJs(r.by)}')">Remove</button>
+        </div>`}
       </div>`;
     }).join('')}
   `).join('');
+}
+
+function escJs(s) { return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+function recKey(name, by) { return btoa(unescape(encodeURIComponent(name + '|' + by))).replace(/[^a-zA-Z0-9]/g, ''); }
+
+let pendingRecDelete = null;
+
+function markVisited(name, by) {
+  pendingRecDelete = { name, by };
+  document.getElementById('r-name').value = name;
+  document.querySelector('[onclick*="goTo(\'rate\'"]').click();
+  showToast(`Rate "${name}" — recommended by ${by}`);
+}
+
+function confirmRemoveRec(name, by) {
+  const key = recKey(name, by);
+  const box = document.getElementById('rec-actions-' + key);
+  if (!box) return;
+  box.innerHTML = `
+    <button class="rec-btn" onclick="renderRecs()">Cancel</button>
+    <button class="rec-btn confirm-remove" onclick="doRemoveRec('${escJs(name)}','${escJs(by)}')">Confirm remove</button>
+  `;
+}
+
+async function doRemoveRec(name, by) {
+  const key = recKey(name, by);
+  const box = document.getElementById('rec-actions-' + key);
+  if (box) box.innerHTML = '<span style="font-size:12px;color:var(--text3);padding:6px 0;">Removing…</span>';
+  try {
+    await postToSheet({ action: 'deleteRec', name, by });
+    recs = recs.filter(r => !(r.name === name && r.by === by));
+    showToast('Recommendation removed');
+    renderRecs();
+  } catch(e) {
+    alert('Could not remove. Check your connection and try again.');
+    renderRecs();
+  }
 }
 
 function setStar(n) {
@@ -656,6 +721,13 @@ async function saveVisit() {
     document.getElementById('r-specialty-new').style.display = 'none';
     document.getElementById('r-comment').value = '';
     setStar(0);
+    if (pendingRecDelete && pendingRecDelete.name.toLowerCase() === name.toLowerCase()) {
+      try {
+        await postToSheet({ action: 'deleteRec', name: pendingRecDelete.name, by: pendingRecDelete.by });
+        recs = recs.filter(r => !(r.name === pendingRecDelete.name && r.by === pendingRecDelete.by));
+      } catch(e) { /* rec cleanup failed silently; row will show as visited next load */ }
+      pendingRecDelete = null;
+    }
     showToast('Visit saved! ✓');
     renderBrowse();
   } catch(e) {
